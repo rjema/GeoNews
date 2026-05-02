@@ -30,6 +30,9 @@ function toCountryCode(countryName) {
 function startAndEndOfDay(selectedDate) {
   const start = new Date(`${selectedDate}T00:00:00.000Z`);
   const end = new Date(`${selectedDate}T23:59:59.999Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return null;
+  }
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 }
 
@@ -108,9 +111,12 @@ function buildListUrl({
   includeDateRange,
   includeCountry,
   countryName,
+  includeLanguage,
 }) {
   const url = new URL(`${FREE_NEWS_BASE_URL}/news`);
-  url.searchParams.set('language', 'en');
+  if (includeLanguage) {
+    url.searchParams.set('language', 'en');
+  }
   url.searchParams.set('order_by', 'archive');
   url.searchParams.set('page_size', '20');
   if (includeDateRange) {
@@ -123,6 +129,26 @@ function buildListUrl({
     url.searchParams.set('in_title', countryName);
   }
   return url;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchWithRetry(url, options, retries = 2) {
+  let attempts = 0;
+  while (attempts <= retries) {
+    const response = await fetch(url, options);
+    if (response.ok) return response;
+
+    if (response.status === 429 && attempts < retries) {
+      await sleep(600 * (attempts + 1));
+      attempts += 1;
+      continue;
+    }
+
+    return response;
+  }
+
+  return fetch(url, options);
 }
 
 app.get('/api/health', (_req, res) => {
@@ -152,20 +178,27 @@ app.post('/api/news', async (req, res) => {
   }
 
   const countryCode = toCountryCode(countryName);
-  const { startIso, endIso } = startAndEndOfDay(selectedDate);
+  const dateRange = startAndEndOfDay(selectedDate);
+  const startIso = dateRange?.startIso ?? '';
+  const endIso = dateRange?.endIso ?? '';
 
   try {
     const queryPlans = [
-      { includeDateRange: true, includeCountry: true },
-      { includeDateRange: true, includeCountry: false },
-      { includeDateRange: false, includeCountry: true },
-      { includeDateRange: false, includeCountry: false },
+      { includeDateRange: true, includeCountry: true, includeLanguage: true },
+      { includeDateRange: true, includeCountry: false, includeLanguage: true },
+      { includeDateRange: false, includeCountry: true, includeLanguage: true },
+      { includeDateRange: false, includeCountry: false, includeLanguage: true },
+      { includeDateRange: false, includeCountry: true, includeLanguage: false },
+      { includeDateRange: false, includeCountry: false, includeLanguage: false },
     ];
 
     let rawItems = [];
-    let lastProviderError = '';
 
     for (const plan of queryPlans) {
+      if (plan.includeDateRange && !dateRange) {
+        continue;
+      }
+
       const listUrl = buildListUrl({
         countryCode,
         startIso,
@@ -173,13 +206,13 @@ app.post('/api/news', async (req, res) => {
         includeDateRange: plan.includeDateRange,
         includeCountry: plan.includeCountry,
         countryName,
+        includeLanguage: plan.includeLanguage,
       });
-      const listResponse = await fetch(listUrl, {
+      const listResponse = await fetchWithRetry(listUrl, {
         headers: { 'x-api-key': freeNewsApiKey },
       });
 
       if (!listResponse.ok) {
-        lastProviderError = (await listResponse.text()).slice(0, 500);
         continue;
       }
 
@@ -189,13 +222,6 @@ app.post('/api/news', async (req, res) => {
         rawItems = items;
         break;
       }
-    }
-
-    if (rawItems.length === 0 && lastProviderError) {
-      return res.status(502).json({
-        error: 'Upstream provider request failed.',
-        details: lastProviderError,
-      });
     }
 
     const withoutDuplicates = rawItems.filter((item) => {
@@ -213,7 +239,7 @@ app.post('/api/news', async (req, res) => {
         detailUrl.searchParams.set('uuid', uuid);
 
         try {
-          const detailResponse = await fetch(detailUrl, {
+          const detailResponse = await fetchWithRetry(detailUrl, {
             headers: { 'x-api-key': freeNewsApiKey },
           });
           if (!detailResponse.ok) {
