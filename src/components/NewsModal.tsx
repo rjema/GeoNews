@@ -34,10 +34,6 @@ export function NewsModal({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (isOpen) setCurrentIndex(0);
-  }, [isOpen]);
-
-  useEffect(() => {
     scrollContainerRef.current?.scrollTo(0, 0);
   }, [currentIndex]);
 

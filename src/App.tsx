@@ -10,6 +10,7 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().split('T')[0],
   );
+  const [modalInstanceKey, setModalInstanceKey] = useState(0);
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -22,6 +23,7 @@ export default function App() {
 
   const handleCountryClick = (countryName: string) => {
     reset();
+    setModalInstanceKey((prev) => prev + 1);
     setSelectedCountry(countryName);
     setIsModalOpen(true);
     fetchNews(countryName, selectedDate, false);
@@ -54,6 +56,7 @@ export default function App() {
       <WorldMap onCountryClick={handleCountryClick} />
 
       <NewsModal
+        key={modalInstanceKey}
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         articles={articles}
